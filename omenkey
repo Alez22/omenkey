@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# omenkey - control the HP Omen 4-zone keyboard RGB via the omen_rgb module.
+#
+# Hardware brightness control does not work on this firmware, so brightness
+# is emulated by scaling the RGB value (e.g. white 50% -> 808080).
+
+set -euo pipefail
+
+ZDIR="/sys/devices/platform/omen_rgb/rgb_zones"
+# Persisted last-applied colors, restored at boot by the systemd service.
+STATE_FILE="/var/lib/omenkey/last_colors"
+
+# Named colors at full intensity (RRGGBB).
+declare -A COLORS=(
+	[white]=FFFFFF
+	[red]=FF0000
+	[green]=00FF00
+	[blue]=0000FF
+	[yellow]=FFFF00
+	[cyan]=00FFFF
+	[magenta]=FF00FF
+	[orange]=FF6000
+	[purple]=8000FF
+	[pink]=FF1493
+	[off]=000000
+)
+
+print_help() {
+	cat <<'EOF'
+omenkey - HP Omen keyboard RGB control
+
+USAGE:
+  omenkey <color> [pct]        set all zones to a named color
+  omenkey RRGGBB               set all zones to a hex color
+  omenkey Z0 Z1 Z2 Z3          set each zone to a hex color
+  omenkey get                  print current zone colors
+  omenkey restore              re-apply the last saved colors (used at boot)
+  omenkey list                 list available color names
+  omenkey help                 show this help
+
+NAMED COLORS:
+  white red green blue yellow cyan magenta orange purple pink off
+
+BRIGHTNESS (pct, 0-100):
+  Optional second argument dims a named color by scaling its RGB value.
+  100 = full, 50 = half, etc. Hardware brightness is not used.
+
+EXAMPLES:
+  omenkey white                all white, full
+  omenkey white 50             all white, ~50% brightness
+  omenkey red 30               dim red
+  omenkey 808080               custom hex (half white)
+  omenkey FF0000 00FF00 0000FF FFFFFF
+  omenkey off                  turn lighting off
+  omenkey get
+EOF
+}
+
+# Scale a 6-hex-digit color by a percentage (0-100). Echoes new RRGGBB.
+scale_color() {
+	local hex="$1" pct="$2"
+	local r=$((16#${hex:0:2} * pct / 100))
+	local g=$((16#${hex:2:2} * pct / 100))
+	local b=$((16#${hex:4:2} * pct / 100))
+	printf '%02X%02X%02X' "$r" "$g" "$b"
+}
+
+# Save the four currently-applied colors so boot can restore them (needs root).
+save_state() {
+	sudo mkdir -p "$(dirname "$STATE_FILE")"
+	sudo bash -c "cat $ZDIR/zone0 $ZDIR/zone1 $ZDIR/zone2 $ZDIR/zone3 > $STATE_FILE"
+}
+
+# Write the same hex color to all four zones, then persist (needs root).
+set_all() {
+	local hex="$1"
+	for z in 0 1 2 3; do
+		sudo bash -c "echo $hex > $ZDIR/zone$z"
+	done
+	save_state
+}
+
+is_hex6() { [[ "$1" =~ ^[0-9A-Fa-f]{6}$ ]]; }
+
+# --- argument handling ---------------------------------------------------
+
+# Help / list do not need the module loaded.
+case "${1:-}" in
+help | --help | -h | "") print_help; exit 0 ;;
+list)
+	echo "Available colors:"
+	for name in "${!COLORS[@]}"; do printf "  %-9s %s\n" "$name" "${COLORS[$name]}"; done | sort
+	exit 0
+	;;
+esac
+
+if [ ! -d "$ZDIR" ]; then
+	echo "omenkey: module not loaded ($ZDIR missing). Run: sudo modprobe omen_rgb" >&2
+	exit 1
+fi
+
+# Restore the last saved colors (used by the boot service). Falls back to
+# white if no state has been saved yet.
+if [ "$1" = "restore" ]; then
+	if [ -r "$STATE_FILE" ]; then
+		mapfile -t saved <"$STATE_FILE"
+		i=0
+		for c in "${saved[@]}"; do
+			[ "$i" -lt 4 ] || break
+			is_hex6 "$c" && sudo bash -c "echo $c > $ZDIR/zone$i"
+			i=$((i + 1))
+		done
+	else
+		set_all FFFFFF
+	fi
+	exit 0
+fi
+
+if [ "$1" = "get" ]; then
+	for z in 0 1 2 3; do
+		printf "zone%d = %s\n" "$z" "$(cat "$ZDIR/zone$z")"
+	done
+	exit 0
+fi
+
+# Named color, with optional brightness percentage.
+if [ -n "${COLORS[${1,,}]:-}" ]; then
+	hex="${COLORS[${1,,}]}"
+	if [ $# -ge 2 ]; then
+		pct="$2"
+		[[ "$pct" =~ ^[0-9]+$ ]] && [ "$pct" -le 100 ] || {
+			echo "omenkey: brightness must be 0-100" >&2; exit 1; }
+		hex="$(scale_color "$hex" "$pct")"
+	fi
+	set_all "$hex"
+	exit 0
+fi
+
+# Hex forms.
+case $# in
+1)
+	is_hex6 "$1" || { echo "omenkey: unknown color or invalid hex '$1' (try: omenkey list)" >&2; exit 1; }
+	set_all "$1"
+	;;
+4)
+	for c in "$@"; do
+		is_hex6 "$c" || { echo "omenkey: invalid hex '$c' (expected RRGGBB)" >&2; exit 1; }
+	done
+	i=0
+	for c in "$@"; do
+		sudo bash -c "echo $c > $ZDIR/zone$i"
+		i=$((i + 1))
+	done
+	save_state
+	;;
+*)
+	echo "omenkey: bad arguments. Run 'omenkey help'." >&2
+	exit 1
+	;;
+esac

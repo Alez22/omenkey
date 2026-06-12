@@ -1,0 +1,14 @@
+[Unit]
+Description=Restore last HP Omen keyboard RGB colors
+# Wait for the omen_rgb sysfs interface to exist before writing.
+After=systemd-modules-load.service
+ConditionPathExists=/sys/devices/platform/omen_rgb/rgb_zones/zone0
+
+[Service]
+Type=oneshot
+# Re-apply whatever colors were last set via omenkey (falls back to white).
+ExecStart=/usr/local/bin/omenkey restore
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
