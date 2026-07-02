@@ -59,6 +59,20 @@ platform device.
 Requires `dkms`, `gcc`, `make`, and the kernel headers for your running kernel
 (all present by default on Ubuntu).
 
+### Quick install (recommended)
+
+`install.sh` does the whole setup in one step (DKMS install, boot auto-load,
+`omenkey` tool, and the systemd service) and is safe to re-run:
+
+```bash
+cd omen_rgb
+sudo ./install.sh
+```
+
+### Manual install
+
+If you prefer to run the steps yourself:
+
 ```bash
 cd omen_rgb
 
@@ -127,8 +141,17 @@ sudo bash -c 'echo 00FFFF > /sys/devices/platform/omen_rgb/rgb_zones/zone0'
 A systemd service re-applies your colors on every boot (the firmware does not
 remember them across reboots, and the module reads whatever the firmware holds).
 
-Edit the `ExecStart` line in `omen-rgb-colors.service` to set your preferred
-color, then install it:
+The service runs `omenkey restore`, which re-applies the **last color you
+set**: every time you run `omenkey <color>` the choice is saved, and the next
+boot restores it. So you don't edit the service — just set the color you want
+once, e.g.:
+
+```bash
+omenkey blue     # applied now, and restored on every reboot
+```
+
+`install.sh` already installs and enables this service. If you did a manual
+install, enable it with:
 
 ```bash
 sudo install -m 644 omen-rgb-colors.service /etc/systemd/system/omen-rgb-colors.service
@@ -160,6 +183,7 @@ sudo modprobe -r omen_rgb
 
 | File | Purpose |
 |---|---|
+| `install.sh` | One-step setup (DKMS, boot auto-load, tool, service) |
 | `omen_rgb.c` | Kernel module: WMI access + sysfs zone files |
 | `Makefile` | Out-of-tree module build |
 | `dkms.conf` | DKMS packaging (persistence across kernel updates) |
